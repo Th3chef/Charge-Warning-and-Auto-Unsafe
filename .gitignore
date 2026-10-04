@@ -1,0 +1,8 @@
+# build outputs and game-derived files (the build extracts the game's railgun sound bank from your install)
+src/build/
+src/game/*.main
+src/game/game_ids.txt
+src/tools/warning_preview.wav
+__pycache__/
+*.pyc
+*.zip
