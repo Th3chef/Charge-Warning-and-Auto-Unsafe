@@ -1,0 +1,13 @@
+{
+  "cue_s": 0.61,
+  "cue": "first warning beep",
+  "length_s": 1.0,
+  "beeps_s": [
+    0.61,
+    0.68,
+    0.75,
+    0.82
+  ],
+  "beep_s": 0.045,
+  "snap_s": 0.93
+}
