@@ -1,0 +1,45 @@
+name: Bug report
+description: The warning or Auto unsafe mode doesn't work as described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report! If it's about Auto unsafe mode, please attach its log (RailgunAutoUnsafe.log in %LOCALAPPDATA%\CowboyBingus\Helldivers2\Logs).
+  - type: input
+    id: version
+    attributes:
+      label: Mod version
+      placeholder: 2.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options
+      description: Which Warning volume you picked, and whether Auto unsafe mode is ticked. Do you use Bingus Shared Loader?
+      placeholder: "Loud, Auto unsafe mode on, Bingus Shared Loader installed."
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game version / date of the last game update
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected and what you heard or saw. Solo, hosting or joining someone else's game?
+    validations:
+      required: true
+  - type: textarea
+    id: mods
+    attributes:
+      label: Other mods
+      description: Other mods that change the Railgun or its sounds, and your mod manager.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: Drag RailgunAutoUnsafe.log here (Auto unsafe mode only; the warning sound has no log).
