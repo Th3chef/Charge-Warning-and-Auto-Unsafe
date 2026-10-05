@@ -25,8 +25,11 @@ A Lua addon in the option folder "Auto Unsafe" (needs Bingus Shared Loader). Eve
 support weapon (equipment record +8); a Railgun it hasn't seen yet in Safe gets Unsafe written once into the weapon
 component's mode entry (weapon manager +96, 12 bytes per weapon: +0 fire mode 5 Safe / 6 Unsafe, +5 flag 16 in
 Unsafe) and into the record's copy (+24, which the game refreshes from the entry every frame). All game addresses
-come from code-pattern scans at start-up; the entry must match the copy before anything is written, else it does
-nothing. Log: RailgunAutoUnsafe.log in the Bingus Logs folder (numbered test builds: Logs\test).
+come from code-pattern scans at start-up (remembered per game build in %LOCALAPPDATA%\RailgunAutoUnsafe.cache; every
+cached spot is re-checked against its pattern, otherwise a full rescan); the entry must match the copy and all three
+write targets must be writable before anything is written, else it does nothing. A weapon only counts as a Railgun when
+its entity type in the game's owner table is the RS-422 Railgun's (resource hash 2e9d0bdc48b09e60) and that row is marked
+as ours: the Arc Thrower uses the same fire mode numbers (2.0.0 switched it to unsafe and it blew up). Log: RailgunAutoUnsafe.log in the Bingus Logs folder (numbered test builds: Logs\test).
     python build.py            release + -Tester.zip (extra log lines, test GUID)
     python build.py test N     numbered test build
 
