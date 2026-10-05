@@ -33,7 +33,7 @@ In your mod manager (Arsenal / HD2 Mod Manager), open the mod's options (Arsenal
 
 ## Download
 
-Get **Railgun-Warning-and-Auto-Unsafe-2.0.0.zip** from the [latest release](https://github.com/Th3chef/Railgun-Warning-and-Auto-Unsafe/releases/latest) (not the "Source code" archives). Also on [Nexus Mods](https://www.nexusmods.com/helldivers2/mods/16754) and AyakaMods.
+Get **Railgun-Warning-and-Auto-Unsafe-2.0.1.zip** from the [latest release](https://github.com/Th3chef/Railgun-Warning-and-Auto-Unsafe/releases/latest) (not the "Source code" archives). Also on [Nexus Mods](https://www.nexusmods.com/helldivers2/mods/16754) and AyakaMods.
 
 ## Install / update
 
@@ -56,13 +56,13 @@ Disable it in your mod manager, then Purge and Deploy, or delete the patch files
 - The timing assumes the normal unsafe charge (90% after 2.5 seconds). If the game changes the charge speed, the beeps will be early or late.
 - The surge stays silent until the charge is past what safe mode can reach, so its first moments may be quiet or cut.
 - The warning is part of the Railgun's own sounds, so you may also hear it from other players' Railguns.
-- Auto unsafe mode is new in 2.0.0. If a Railgun ever stays in Safe, its log says why (see Troubleshooting).
+- Auto unsafe mode only acts on a Railgun it can positively identify. If a Railgun ever stays in Safe, its log says why (see Troubleshooting).
 
 ## How it works
 
 The warning is one sound added to the game's own Railgun sound bank. It starts with the charge-up, delayed so its first warning beep lands 2.5 seconds in (90% charge), and its volume follows the game's Railgun charge value: silent until the charge is past what safe mode can reach. Releasing the trigger or firing stops it. It doesn't change any stats, damage or gameplay, only what you hear.
 
-Auto unsafe mode is a small Bingus Shared Loader script. Right after you pick up a Railgun it hasn't seen before, it switches that Railgun's mode setting to Unsafe, the same setting the game's own Safe/Unsafe switch changes. Nothing else is touched.
+Auto unsafe mode is a small Bingus Shared Loader script. Right after you pick up a Railgun it hasn't seen before, it switches that Railgun's mode setting to Unsafe, the same setting the game's own Safe/Unsafe switch changes. It identifies the Railgun by its weapon type, so other charge weapons such as the Arc Thrower are never touched. Nothing else is touched.
 
 ## Troubleshooting
 
