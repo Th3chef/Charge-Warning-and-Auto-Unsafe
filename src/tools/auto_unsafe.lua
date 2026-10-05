@@ -6,6 +6,9 @@
 -- 6 = Unsafe - and +5 a flag byte with 16 set in Unsafe), which the game copies into the weapon record (+24) every
 -- frame. Every quarter second the addon looks up your helldiver's support weapon; when it is a Railgun it hasn't
 -- seen yet and in Safe mode, it writes Unsafe into the mode entry once (and the copy), then checks the game took it.
+-- A weapon only counts as a Railgun when its entity type is the RS-422 Railgun's (resource hash 2e9d0bdc48b09e60, the
+-- same in every game build): other charge weapons such as the Arc Thrower use the same fire mode numbers, and switching
+-- those to "unsafe" made them overload and blow up. Anything that can't be confirmed as the Railgun is left alone.
 -- (Found with two read-only diagnostics, Oct 2026 game: writing only the copy was undone by the game within 0.1 s.) Everything it needs is found by scanning the game's code at start-up, so a game patch
 -- that moves things around doesn't break it; if something isn't found it stays off and says so in its log
 -- (RailgunAutoUnsafe.log next to the other Bingus mods' logs).
@@ -35,6 +38,12 @@ local MODE_AT, SAFE, UNSAFE = 24, 5, 6
 local WEAPON_STRIDE = 1008
 local STATES_AT, STATE_STRIDE, FLAG_AT, UNSAFE_FLAG = 96, 12, 5, 16   -- the weapon component's mode entries
 local POLL_SECONDS = 0.25
+-- what a Railgun is: its entity type (resource hash of the weapon entity's name; it never changes with a game patch)
+local function type_bytes(hex) return (hex:gsub('..', function(x) return string.char(tonumber(x, 16)) end):reverse()) end
+local RAILGUN_TYPE = type_bytes('2e9d0bdc48b09e60')
+local TYPE_NAMES = { [RAILGUN_TYPE] = 'RS-422 Railgun', [type_bytes('96de9cd50f7306e6')] = 'ARC-3 Arc Thrower' }
+local OWNER_ROW_COUNT, OWNER_ROW_SIZE = 2048, 24    -- the game's owner table (2048 rows of 24 bytes; type at +0, id at +8)
+local TYPE_TRIES = 8                                -- polls to wait for a new weapon's owner row before leaving it alone
 
 -- ---------------------------------------------------------------------------------------------- log
 local LOGFILE
@@ -144,16 +153,29 @@ local OWNER_INDEX = '458b93????????33d248895c241041????????????48896c2418410fafd
 local OWNER_ROWS = '8b4104488d0c40488d85????????488d04c8eb??488d05????????'
 local AVATAR_TYPE = ('4d1c334d294dfa97'):gsub('..', function(x) return string.char(tonumber(x, 16)) end):reverse()
 
-local function code_section(base)
+-- game.dll's code section and a key for this game build (link time stamp, image size, code section place and size)
+local function code_info(base)
   local hdr = rd(base, 4096, 'game.dll header')
   local pe = u32(hdr, 0x3c)
   local count, optsize = hdr:byte(pe + 7) + hdr:byte(pe + 8) * 256, hdr:byte(pe + 21) + hdr:byte(pe + 22) * 256
   for i = 0, count - 1 do
     local s = pe + 24 + optsize + 40 * i
     local vsize, rva, flags = u32(hdr, s + 8), u32(hdr, s + 12), u32(hdr, s + 36)
-    if bit.band(flags, 0x20000000) ~= 0 and vsize > 0x100000 then return rd(base + rva, vsize, 'game code'), rva end
+    if bit.band(flags, 0x20000000) ~= 0 and vsize > 0x100000 then
+      return rva, vsize, string.format('%08x-%08x-%08x-%08x', u32(hdr, pe + 8), u32(hdr, pe + 0x50), rva, vsize)
+    end
   end
   error('no code section', 0)
+end
+
+-- does the code at this offset match the pattern (?? = any byte)?
+local function matches(bytes, p)
+  if not bytes or #bytes ~= #p / 2 then return false end
+  for k = 0, #p / 2 - 1 do
+    local h = p:sub(2 * k + 1, 2 * k + 2)
+    if h ~= '??' and bytes:byte(k + 1) ~= tonumber(h, 16) then return false end
+  end
+  return true
 end
 
 local function find_once(text, p)
@@ -186,28 +208,78 @@ local function find_once(text, p)
 end
 
 local G = {}
+local CACHE = os.getenv('LOCALAPPDATA') and (os.getenv('LOCALAPPDATA') .. '\\RailgunAutoUnsafe.cache')
+-- what each found item is: { pattern, how its value is read } (a value is an address, or an offset for the owner table)
+local function items()
+  local list = {}
+  for name, pats in pairs(PATTERNS) do
+    for k, p in ipairs(pats) do
+      list[#list + 1] = { key = name .. ' ' .. k, name = name, p = p.p, value = function(b, rva, o) return rva + o + p.size + si32(b, p.disp_at) end }
+    end
+  end
+  list[#list + 1] = { key = 'owner_index 1', name = 'owner_index', p = OWNER_INDEX, value = function(b) return u32(b, 3) - 8 end }
+  list[#list + 1] = { key = 'owner_rows 1', name = 'owner_rows', p = OWNER_ROWS, value = function(b) return u32(b, 10) - 8 end }
+  return list
+end
+local function apply(gbase, values)
+  for name in pairs(PATTERNS) do G[name] = gbase + values[name] end
+  G.owner_index, G.owner_rows = values.owner_index, values.owner_rows
+end
+
+-- the cache: a line with the build key, then 'name k offset' for one place each item was found. On load every place is read
+-- back and must still match its pattern; anything off and it scans the code again (a patch can't make it use stale places).
+local function from_cache(gbase, rva, key)
+  if not CACHE then return false end
+  local f = io.open(CACHE, 'r')
+  if not f then return false end
+  local first, at = f:read('*l'), {}
+  for line in f:lines() do
+    local item, o = line:match('^(%S+ %d+) (%d+)$')
+    if item then at[item] = tonumber(o) end
+  end
+  f:close()
+  if first ~= 'key ' .. key then return false end
+  local values = {}
+  for _, it in ipairs(items()) do
+    local o = at[it.key]
+    if o and not values[it.name] then
+      local b = read(gbase + rva + o, #it.p / 2)
+      if not matches(b, it.p) then return false end
+      values[it.name] = it.value(b, rva, o)
+    end
+  end
+  for name in pairs(PATTERNS) do if not values[name] then return false end end
+  if not (values.owner_index and values.owner_rows) then return false end
+  apply(gbase, values)
+  return true
+end
+
 local function find_layout()
   local game = K32.RauGetModuleHandleA('game.dll')
   need(game ~= nil, 'game.dll not loaded')
   local gbase = tonumber(ffi.cast('uintptr_t', game))
   local t = os.clock()
-  local text, rva = code_section(gbase)
-  for name, pats in pairs(PATTERNS) do
-    local val
-    for _, p in ipairs(pats) do
-      local o = find_once(text, p.p)
-      if o then
-        local v = rva + o + p.size + si32(text, o + p.disp_at)
-        need(not val or val == v, name .. ': patterns disagree')
-        val = v
-      end
+  local rva, vsize, key = code_info(gbase)
+  if from_cache(gbase, rva, key) then note(string.format('game addresses: from the cache (%.2f s)', os.clock() - t)); return end
+  local text = rd(gbase + rva, vsize, 'game code')
+  local values, found = {}, {}
+  for _, it in ipairs(items()) do
+    local o = find_once(text, it.p)
+    if o then
+      local v = it.value(text:sub(o + 1, o + #it.p / 2), rva, o)
+      need(not values[it.name] or values[it.name] == v, it.name .. ': patterns disagree')
+      if not values[it.name] then values[it.name] = v; found[#found + 1] = it.key .. ' ' .. o end
     end
-    G[name] = gbase + need(val, name .. ': not found')
   end
-  local oi = need(find_once(text, OWNER_INDEX), 'owner map: not found')
-  local orow = need(find_once(text, OWNER_ROWS), 'owner rows: not found')
-  G.owner_index, G.owner_rows = u32(text, oi + 3) - 8, u32(text, orow + 10) - 8
-  note(string.format('game addresses found (%.2f s)', os.clock() - t))
+  for name in pairs(PATTERNS) do need(values[name], name .. ': not found') end
+  need(values.owner_index, 'owner map: not found')
+  need(values.owner_rows, 'owner rows: not found')
+  apply(gbase, values)
+  note(string.format('game addresses: found by scanning the game code (%.2f s)', os.clock() - t))
+  if CACHE then
+    local f = io.open(CACHE, 'w')
+    if f then f:write('key ' .. key .. '\n' .. table.concat(found, '\n') .. '\n'); f:close() end
+  end
 end
 
 -- your helldiver's support weapon: entity id, or nil + why
@@ -235,8 +307,39 @@ local function my_support_weapon()
 end
 
 
+-- what kind of weapon an entity is: its 8-byte type from the game's owner table, or nil + why. Only rows whose id (+8) is
+-- the weapon and that are marked as ours (byte 20 & 3 == 1, as for your helldiver) count, and they must all agree; a
+-- weapon with no such row, or rows that disagree, is never treated as a Railgun.
+local function hexof(t)
+  local h = {}
+  for i = #t, 1, -1 do h[#h + 1] = string.format('%02x', t:byte(i)) end
+  return table.concat(h)
+end
+local function weapon_type(id)
+  local owners = rptr(G.owners, 'owners')
+  local all = rd(owners + G.owner_rows, OWNER_ROW_COUNT * OWNER_ROW_SIZE, 'owner rows')
+  local found, rows, mine = nil, 0, 0
+  for r = 0, OWNER_ROW_COUNT - 1 do
+    local o = r * OWNER_ROW_SIZE
+    if u32(all, o + 8) == id then
+      rows = rows + 1
+      if bit.band(all:byte(o + 21), 3) == 1 then
+        local t = all:sub(o + 1, o + 8)
+        mine = mine + 1
+        if found and found ~= t then return nil, 'rows disagree (' .. hexof(found) .. ' / ' .. hexof(t) .. ')', rows, mine end
+        found = found or t
+      end
+    end
+  end
+  if not found then return nil, rows > 0 and 'its owner row is not marked as ours' or 'no owner row', rows, 0 end
+  return found, nil, rows, mine
+end
+local function type_name(t) return TYPE_NAMES[t] or ('type ' .. hexof(t)) end
+
 -- ---------------------------------------------------------------------------------------------- the rule
-local handled = {}                                 -- Railgun ids already dealt with (set, or seen in Unsafe)
+local handled = {}                                 -- weapon ids already dealt with (Railguns set or seen in Unsafe,
+                                                   -- and weapons that are not Railguns)
+local tries = {}                                   -- weapon id -> polls spent waiting for its owner row
 local current, last_why = nil, nil
 local PRUNE_SECONDS, next_prune = 5, 0
 -- (sweep) Railguns that no longer exist are forgotten, so a new Railgun that gets an old one's id is still set
@@ -244,6 +347,10 @@ local function prune(wm)
   for id in pairs(handled) do
     local ok, wi = pcall(map_lookup, wm + 48, id, 32768)
     if ok and not wi then handled[id] = nil end
+  end
+  for id in pairs(tries) do
+    local ok, wi = pcall(map_lookup, wm + 48, id, 32768)
+    if ok and not wi then tries[id] = nil end
   end
 end
 local pending = nil                                -- { id, addr, at }: check that the game kept Unsafe
@@ -254,7 +361,7 @@ local function poll()
     else event(string.format('Railgun %d: the game put mode %d back', pending.id, now_mode)) end
     pending = nil
   end
-  if next(handled) and os.clock() >= next_prune then  -- (also while you hold no support weapon)
+  if (next(handled) or next(tries)) and os.clock() >= next_prune then  -- (also while you hold no support weapon)
     next_prune = os.clock() + PRUNE_SECONDS
     pcall(function() prune(rptr(G.weapons, 'weapons')) end)
   end
@@ -279,6 +386,25 @@ local function poll()
     if TESTER then event(string.format('support weapon %d: fire mode %d, not a Railgun - left alone', id, mode)) end
     return
   end
+  -- the fire mode numbers alone don't make it a Railgun (the Arc Thrower uses them too): check its entity type
+  local wtype, twhy, rows, mine = weapon_type(id)
+  if not wtype then
+    tries[id] = (tries[id] or 0) + 1
+    if tries[id] < TYPE_TRIES then current = nil; return end   -- (its row may not be there yet: looked at again next poll)
+    handled[id] = true; tries[id] = nil
+    event(string.format('support weapon %d: fire mode %d, could not confirm it is a Railgun (%s) - left alone', id, mode, twhy))
+    return
+  end
+  tries[id] = nil
+  if TESTER then
+    event(string.format('support weapon %d: %s, fire mode %d (owner rows %d, of them ours %d)', id, type_name(wtype), mode,
+      rows, mine))
+  end
+  if wtype ~= RAILGUN_TYPE then
+    handled[id] = true
+    event(string.format('support weapon %d: %s, not a Railgun - left alone', id, type_name(wtype)))
+    return
+  end
   handled[id] = true
   RAU.seen = RAU.seen + 1
   if mode == UNSAFE then event(string.format('Railgun %d already in Unsafe', id)); return end
@@ -287,6 +413,11 @@ local function poll()
   local e = rd(st, STATE_STRIDE, 'mode entry')
   if u32(e, 0) ~= mode or bit.band(e:byte(FLAG_AT + 1), UNSAFE_FLAG) ~= 0 then
     event(string.format('Railgun %d: mode entry reads %d (flags %d), not Safe - layout changed? left alone', id, u32(e, 0), e:byte(FLAG_AT + 1)))
+    return
+  end
+  -- all three places must be writable before the first write, so it can never be left half switched
+  if not (writable(st, FLAG_AT + 1) and writable(addr, 4)) then
+    event(string.format('Railgun %d: could not set Unsafe (memory not writable) - left alone', id))
     return
   end
   if write_u32(st, UNSAFE) and write_u8(st + FLAG_AT, bit.bor(e:byte(FLAG_AT + 1), UNSAFE_FLAG)) and write_u32(addr, UNSAFE) then

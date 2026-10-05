@@ -16,7 +16,7 @@ from discover import discover
 
 NAME = 'Railgun Warning & Auto Unsafe'
 FILE_BASE = 'Railgun-Warning-and-Auto-Unsafe'      # zip names (no '&': Nexus file names allow only letters, digits, spaces and _ ' ( ) . -)
-VERSION = '2.0.0'
+VERSION = '2.0.1'
 GUID = 'c8736b4d-7681-43b3-ac5e-03314f2d7034'
 GUID_TEST = '6cf144dc-0353-4f83-9da1-b57f2875bce7'   # test builds
 TEST = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[1] == 'test' else 0
