@@ -1,11 +1,29 @@
 {
-  "game_bank_md5": "1841b642b844a97e8511cbe486c02f32",
-  "version": "2.0.0",
-  "charge_event": 776670436,
-  "charge_rtpc": 3218930162,
-  "charge_end_event": 1887886872,
-  "mixer": 25230646,
-  "anchor": 934480751,
-  "bank_id": 280762536,
-  "fire_event": 2040339267
+  "version": "3.0.0",
+  "weapons": {
+    "wep_railgun": {
+      "game_bank_md5": "1841b642b844a97e8511cbe486c02f32",
+      "charge_event": 776670436,
+      "charge_rtpc": 3218930162,
+      "charge_end_event": 1887886872,
+      "fire_event": 2040339267,
+      "other_stoppers": [],
+      "mixer": 25230646,
+      "anchor": 934480751,
+      "bank_id": 280762536
+    },
+    "wep_plasma_blaster": {
+      "game_bank_md5": "2d52b3d07d523991bfed9f99aa483bf6",
+      "charge_event": 1805360771,
+      "charge_rtpc": 3218930162,
+      "charge_end_event": 2230772993,
+      "fire_event": 58321,
+      "other_stoppers": [
+        1613947930
+      ],
+      "mixer": 736237980,
+      "anchor": 385178441,
+      "bank_id": 3418245174
+    }
+  }
 }
