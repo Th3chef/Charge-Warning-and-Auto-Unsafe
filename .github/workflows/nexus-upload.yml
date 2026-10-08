@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to upload (for example v2.0.0)
+        description: Release tag to upload (for example v3.0.0)
         required: true
 
 permissions:
@@ -42,9 +42,9 @@ jobs:
             echo "::error::No published release with the tag $TAG. A draft has no tag yet: publish the release (that runs this workflow by itself), or run it by hand with the tag of a release that is already published."
             exit 1
           fi
-          # tags are v2.0.0, v2.0.1, ...; the zip is Railgun-Warning-and-Auto-Unsafe-2.0.0.zip and the Nexus version 2.0.0
+          # tags are v3.0.0, v3.0.1, ...; the zip is Charge-Warning-and-Auto-Unsafe-3.0.0.zip and the Nexus version 3.0.0
           VERSION="${TAG#v}"
-          FILE="Railgun-Warning-and-Auto-Unsafe-${VERSION}.zip"
+          FILE="Charge-Warning-and-Auto-Unsafe-${VERSION}.zip"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$FILE"
           test -s "$FILE"
           unzip -tq "$FILE"
@@ -63,7 +63,7 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body | tr -d '\r' > body.md
           cat body.md | awk '/^(\*\*)?(Install|Updating|Download)/ {exit} {print}' \
             | sed -e 's/\*\*//g' -e 's/^[[:space:]]*#\+[[:space:]]*//' -e 's/^[[:space:]]*[-*][[:space:]]\+//' \
-            | grep -v '^<!--' | grep -v -i '^railgun warning' | grep -v '^[[:space:]]*$' > notes.txt || true
+            | grep -v '^<!--' | grep -v -i -e '^railgun warning' -e '^charge warning' | grep -v '^[[:space:]]*$' > notes.txt || true
           {
             echo 'text<<NOTES_END'
             cat notes.txt
@@ -88,7 +88,7 @@ jobs:
           items = []
           for line in open('notes.txt', encoding='utf-8'):
               t = re.sub(r'^\s*(#+|[-*•]|\d+[.)])\s*', '', line).strip()
-              if not t or t.lower().startswith('railgun warning'):
+              if not t or t.lower().startswith(('railgun warning', 'charge warning')):
                   continue  # blank lines and the title line
               items.append(t if t[-1] in '.!?:' else t + '.')
           def text(xs):
@@ -119,7 +119,7 @@ jobs:
           filename: ${{ env.FILE }}
           version: ${{ env.VERSION }}
           # (Nexus allows only letters, digits, spaces and _ ' ( ) . - in the name)
-          display_name: Railgun Warning and Auto Unsafe
+          display_name: Charge Warning and Auto Unsafe
           description: ${{ steps.desc.outputs.text }}
           changelog: ${{ steps.notes.outputs.text }}
           archive_existing_version: true
