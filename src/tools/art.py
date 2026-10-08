@@ -1,6 +1,6 @@
 """Renders the mod's art with Chromium (Playwright): Anton + Barlow Condensed, Helldivers yellow on black,
-the actual warning sound drawn as a waveform over a charge meter that reaches 90% exactly where the first warning
-beep starts (the cue from ../assets/warning.json); the beeps are drawn as red blocks after it.
+the actual warning sound drawn as a waveform over a charge meter that reaches full damage exactly where the first
+warning beep starts (the cue from ../assets/warning.json); the beeps are drawn as red blocks after it.
 Outputs ../art/: thumbnail_1254.png, thumbnail_512.png (Arsenal), header_1300x372.png, gallery_1920x1080.png,
 GitHub-Social-1280x640.png (the repo's social preview), options/*.png (Arsenal option icons)."""
 import base64, json, os, wave
@@ -11,11 +11,11 @@ from playwright.sync_api import sync_playwright
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ART = os.path.join(ROOT, 'art')
-BADGE = '2.0'
+BADGE = '3.0'
 RED = '#ff2d2d'
 with open(os.path.join(ROOT, 'assets', 'warning.json')) as _f:
     CUE = json.load(_f)                  # cue_s (first beep), length_s, beeps_s, beep_s, snap_s
-CUE_FRAC = CUE['cue_s'] / CUE['length_s']   # where 90% charge sits along the waveform
+CUE_FRAC = CUE['cue_s'] / CUE['length_s']   # where full damage (Railgun 90%, Epoch full charge) sits along the waveform
 YELLOW = '#ffe710'
 CYAN = '#6fe6ff'
 
@@ -38,8 +38,8 @@ def waveform_path(width, height, columns=260):
 
 
 def scope(width, height):
-    """The whole warning as a waveform; a 90% charge meter fills up to the cue (first beep), then the beeps follow
-    as red blocks at their real times."""
+    """The whole warning as a waveform; a charge meter fills up to the cue (first beep, full damage), then the beeps
+    follow as red blocks at their real times."""
     mark_x = CUE_FRAC * width
     x_of = lambda s: s / CUE['length_s'] * width
     seg_w = mark_x / 18
@@ -93,11 +93,11 @@ def page(width, height, layout):
       .mark {{ position:absolute; {L['mark']}; color:{YELLOW}; font-family:Barlow; font-weight:700; font-size:{L['mark_size']}px; letter-spacing:0.05em; }}
     </style></head><body><div class="bg"></div><div class="stripe"></div>
       <div class="scope">{scope(*L['scope_px'])}</div>
-      <div class="mark">90% &middot; FULL DAMAGE</div>
+      <div class="mark">FULL DAMAGE</div>
       <div class="badge">{BADGE}</div>
       <div class="tag"><div class="a">KNOW EXACTLY</div><div class="b">WHEN TO FIRE</div></div>
-      <div class="title"><div class="a">RAILGUN</div><div class="b">WARNING &amp; AUTO UNSAFE</div></div>
-      <div class="foot">RS-422 RAILGUN &nbsp;&bull;&nbsp; BEEPS AT 90% CHARGE &nbsp;&bull;&nbsp; STARTS IN UNSAFE</div>
+      <div class="title"><div class="a">CHARGE</div><div class="b">WARNING &amp; AUTO UNSAFE</div></div>
+      <div class="foot">RS-422 RAILGUN &nbsp;&bull;&nbsp; PLAS-45 EPOCH &nbsp;&bull;&nbsp; BEEPS AT FULL DAMAGE &nbsp;&bull;&nbsp; RAILGUN STARTS IN UNSAFE</div>
     </body></html>'''
 
 
@@ -109,7 +109,7 @@ LAYOUTS = {
         glow='55% 42%', stripe='left:0; right:0; bottom:0; height:22px',
         scope='left:70px; top:300px', scope_px=(1114, 470), mark='left:%s; top:250px' % px(70 + CUE_FRAC * 1114 + 16), mark_size=40,
         badge='left:70px; top:70px', badge_size=92, tag='right:70px; top:74px', tag_size=46,
-        title='left:66px; top:830px', t1=150, t2=118, foot='left:72px; bottom:58px', foot_size=34)),
+        title='left:66px; top:830px', t1=150, t2=118, foot='left:72px; bottom:62px', foot_size=29)),
     'header_1300x372.png': (1300, 372, dict(
         glow='75% 50%', stripe='left:0; right:0; bottom:0; height:10px',
         scope='left:640px; top:70px', scope_px=(610, 250), mark='left:%s; top:40px' % px(640 + CUE_FRAC * 610 + 10), mark_size=26,
@@ -156,6 +156,48 @@ def option_icons():
     d.line([(587, 345), (587, 400)], fill=(255, 45, 45), width=70)                      # the open side, in red
     d.ellipse([472, 590, 552, 670], fill=(14, 14, 16)); d.rectangle([497, 640, 527, 740], fill=(14, 14, 16))   # keyhole
     im.resize((256, 256), Image.LANCZOS).save(os.path.join(ART, 'options', 'unsafe.png'))
+    weapon_icons(back)
+
+
+def _waves(d, cx, cy, n=2, colour=(255, 45, 45)):
+    for i in range(n):
+        r = 90 + 70 * i
+        d.arc([cx - r, cy - r, cx + r, cy + r], -50, 50, fill=colour, width=44)
+
+
+def weapon_icons(back):
+    """One icon per weapon option: the weapon's charge drawn simply, with red warning waves on the right.
+    Railgun: two long rails with a charged bolt between them. Epoch: a plasma orb held by charging coils."""
+    from PIL import ImageDraw, ImageFilter
+    Y, C, W = (255, 231, 16), (111, 230, 255), (235, 250, 255)
+    def framed(draw_fn, glow_fn):
+        glow = Image.new('RGB', (1024, 1024), (0, 0, 0))
+        glow_fn(ImageDraw.Draw(glow))
+        glow = glow.filter(ImageFilter.GaussianBlur(26))
+        im = Image.fromarray(np.clip(np.asarray(back, dtype=np.int16) + np.asarray(glow, dtype=np.int16), 0, 255).astype('uint8'))
+        d = ImageDraw.Draw(im)
+        d.rectangle([0, 0, 1023, 1023], outline=Y, width=56)
+        draw_fn(d)
+        return im
+    # Railgun: rails from the left, bolt between them, waves at the muzzle
+    def rail(d):
+        d.rectangle([110, 340, 690, 440], fill=Y); d.rectangle([110, 584, 690, 684], fill=Y)
+        d.rectangle([110, 440, 190, 584], fill=Y)                                   # breech block
+        d.rectangle([200, 486, 680, 538], fill=W)                                   # the charged bolt
+        _waves(d, 720, 512)
+    def rail_glow(d):
+        d.rectangle([190, 450, 700, 574], fill=C)
+    framed(rail, rail_glow).resize((256, 256), Image.LANCZOS).save(os.path.join(ART, 'options', 'railgun.png'))
+    # Epoch: orb with three coil rings around it, waves on the right
+    def epoch(d):
+        cx, cy = 400, 512
+        d.ellipse([cx - 150, cy - 150, cx + 150, cy + 150], fill=W)
+        for dx in (-200, 0, 200):
+            d.arc([cx + dx - 60, cy - 230, cx + dx + 60, cy + 230], 0, 360, fill=Y, width=46)
+        _waves(d, 640, 512)
+    def epoch_glow(d):
+        d.ellipse([400 - 230, 512 - 230, 400 + 230, 512 + 230], fill=C)
+    framed(epoch, epoch_glow).resize((256, 256), Image.LANCZOS).save(os.path.join(ART, 'options', 'epoch.png'))
 
 
 if __name__ == '__main__':

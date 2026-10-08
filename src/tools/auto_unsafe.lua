@@ -1,5 +1,5 @@
 -- HD2-Addon: mods/chef/railgun_auto_unsafe
--- Railgun Warning & Auto Unsafe - Auto unsafe mode (optional part; Bingus Shared Loader v15+ addon).
+-- Charge Warning & Auto Unsafe - Auto unsafe mode (optional part; a Bingus Shared Loader addon, v19 or newer).
 -- Every new Railgun you pick up starts in Unsafe mode instead of Safe. It is set once per Railgun: switch back to
 -- Safe yourself and it stays Safe. Only your own Railgun is touched.
 -- How: the weapon component keeps a small mode entry per weapon (12 bytes: +0 fire mode - the Railgun: 5 = Safe,
@@ -11,7 +11,8 @@
 -- those to "unsafe" made them overload and blow up. Anything that can't be confirmed as the Railgun is left alone.
 -- (Found with two read-only diagnostics, Oct 2026 game: writing only the copy was undone by the game within 0.1 s.) Everything it needs is found by scanning the game's code at start-up, so a game patch
 -- that moves things around doesn't break it; if something isn't found it stays off and says so in its log
--- (RailgunAutoUnsafe.log next to the other Bingus mods' logs).
+-- (RailgunAutoUnsafe.log next to the other Bingus mods' logs). With Bingus Shared Loader v19 or newer it uses the
+-- loader's log folder and does its one-time scan once every addon has loaded (after_startup); older loaders still work.
 if rawget(_G, 'RailgunAutoUnsafe') then return end
 local VERSION = '@@VERSION@@'
 local TESTER = @@TESTER@@                -- tester builds (numbered tests and the release Tester): extra lines in the log
@@ -28,10 +29,16 @@ for _, d in ipairs({
   'int RauReadProcessMemory(void *process, const void *address, void *buffer, size_t size, size_t *done) __asm__("ReadProcessMemory");',
   'int RauWriteProcessMemory(void *process, void *address, const void *buffer, size_t size, size_t *done) __asm__("WriteProcessMemory");',
   'size_t RauVirtualQuery(const void *address, void *region, size_t size) __asm__("VirtualQuery");',
+  'int RauCreateDirectoryA(const char *path, void *security) __asm__("CreateDirectoryA");',
 }) do pcall(ffi.cdef, d) end
 local K32 = ffi.load('kernel32')
 local PROCESS = K32.RauGetCurrentProcess()
 local T0 = os.clock()
+local STARTED = os.date('%Y-%m-%d %H:%M')
+-- the mod loader: v19 and newer offer a shared log folder and an "after every addon has loaded" hook
+local LOADER = rawget(_G, 'CowboyBingusModLoader')
+local CAPS = type(LOADER) == 'table' and rawget(LOADER, 'capabilities') or nil
+local AFTER_STARTUP = type(LOADER) == 'table' and type(LOADER.after_startup) == 'function' and LOADER.after_startup or nil
 
 -- the Railgun's fire modes in its weapon record (found with the Railgun Mode Finder diagnostic, Oct 2026 game)
 local MODE_AT, SAFE, UNSAFE = 24, 5, 6
@@ -41,18 +48,33 @@ local POLL_SECONDS = 0.25
 -- what a Railgun is: its entity type (resource hash of the weapon entity's name; it never changes with a game patch)
 local function type_bytes(hex) return (hex:gsub('..', function(x) return string.char(tonumber(x, 16)) end):reverse()) end
 local RAILGUN_TYPE = type_bytes('2e9d0bdc48b09e60')
-local TYPE_NAMES = { [RAILGUN_TYPE] = 'RS-422 Railgun', [type_bytes('96de9cd50f7306e6')] = 'ARC-3 Arc Thrower' }
+local TYPE_NAMES = { [RAILGUN_TYPE] = 'RS-422 Railgun', [type_bytes('96de9cd50f7306e6')] = 'ARC-3 Arc Thrower',
+  [type_bytes('e8d5f49ad7780e54')] = 'PLAS-45 Epoch' }
 local OWNER_ROW_COUNT, OWNER_ROW_SIZE = 2048, 24    -- the game's owner table (2048 rows of 24 bytes; type at +0, id at +8)
 local TYPE_TRIES = 8                                -- polls to wait for a new weapon's owner row before leaving it alone
 
 -- ---------------------------------------------------------------------------------------------- log
-local LOGFILE
+local LOGFILE, LOADER_NOTE
 do
+  -- the logs folder: the loader's own (v19+: log_directory, a string or a function), else the usual place
+  local dir
+  if type(LOADER) == 'table' then
+    local ld = rawget(LOADER, 'log_directory')
+    if type(ld) == 'function' then local ok, v = pcall(ld); ld = ok and v or nil end
+    if type(ld) == 'string' and ld ~= '' then dir = (ld:gsub('[\\/]+$', '')) end
+  end
   local base = os.getenv('LOCALAPPDATA')
-  if base then
-    local dir = base .. '\\CowboyBingus\\Helldivers2\\Logs' .. (TEST_BUILD and '\\test' or '')
+  if not dir and base then dir = base .. '\\CowboyBingus\\Helldivers2\\Logs' end
+  LOADER_NOTE = (CAPS and AFTER_STARTUP) and 'mod loader: v19 or newer (its log folder; the scan runs once every addon has loaded)'
+    or 'mod loader: older than v19 - Auto unsafe mode still works; please update Bingus Shared Loader to v19 or newer'
+  if dir then
+    if TEST_BUILD then                       -- numbered test builds log into Logs\test (made here if it is missing)
+      pcall(function() K32.RauCreateDirectoryA(dir .. '\\test', nil) end)
+      local t = io.open(dir .. '\\test\\RailgunAutoUnsafe.log', 'a')
+      if t then t:close(); dir = dir .. '\\test' end
+    end
     local f = io.open(dir .. '\\RailgunAutoUnsafe.log', 'a')
-    if f then f:close(); LOGFILE = dir .. '\\RailgunAutoUnsafe.log' else LOGFILE = base .. '\\RailgunAutoUnsafe.log' end
+    if f then f:close(); LOGFILE = dir .. '\\RailgunAutoUnsafe.log' elseif base then LOGFILE = base .. '\\RailgunAutoUnsafe.log' end
   end
 end
 local notes, events, dirty = {}, {}, true
@@ -67,8 +89,9 @@ local function write_log()
   if not LOGFILE then return end
   local f = io.open(LOGFILE, 'w')
   if not f then return end
-  f:write('Railgun Warning & Auto Unsafe - Auto unsafe mode ' .. VERSION .. (TESTER and ' (tester)' or '') .. '\n')
-  f:write('started ' .. os.date('%Y-%m-%d %H:%M') .. ', running for ' .. string.format('%.0f', os.clock() - T0) .. ' s\n')
+  f:write('Charge Warning & Auto Unsafe - Auto unsafe mode ' .. VERSION .. (TESTER and ' (tester)' or '') .. '\n')
+  f:write('started ' .. STARTED .. ', running for ' .. string.format('%.0f', os.clock() - T0) .. ' s\n')
+  f:write(LOADER_NOTE .. '\n')
   for _, n in ipairs(notes) do f:write(n .. '\n') end
   f:write(string.format('status: %s\nRailguns set to Unsafe: %d (Railguns seen: %d)\n', tostring(RAU.status), RAU.set, RAU.seen))
   f:write('recent events:\n')
@@ -282,14 +305,8 @@ local function find_layout()
   end
 end
 
--- your helldiver's support weapon: entity id, or nil + why
-local function my_support_weapon()
-  local players = rptr(G.players, 'players')
-  local pp = rd(players + 132, 808, 'players')     -- +132 players, +136 local players ... +936 your helldiver (one read)
-  need(u32(pp, 0) <= 4 and u32(pp, 4) <= 4, 'player count')
-  if u32(pp, 0) == 0 or u32(pp, 4) == 0 then return nil, 'no local player yet' end
-  local avatar = u32(pp, 804)
-  if avatar == 32767 then return nil, 'no helldiver' end
+-- (the slow way) your helldiver's owner row -> its loadout -> the address of its loadout slot, or nil + why
+local function find_slot(avatar)
   local owners = rptr(G.owners, 'owners')
   local e = map_lookup(owners + G.owner_index, avatar, 1048576)
   if not e then return nil, 'no helldiver' end
@@ -300,8 +317,29 @@ local function my_support_weapon()
   local q = map_lookup(equipment + 40, u32(me, 8), 8192)
   if not q then return nil, 'no loadout' end
   need(q < 4096, 'equipment index')
-  local slot = rd(rptr(equipment + 80, 'equipment slots') + q * 48, 12, 'equipment slot')
-  local id = u32(slot, 8)                          -- +0 primary, +4 secondary, +8 support weapon, +12 backpack
+  return rptr(equipment + 80, 'equipment slots') + q * 48
+end
+
+-- your helldiver's support weapon: entity id, or nil + why. The way from your helldiver to its loadout slot (five
+-- lookups) is remembered for SLOT_RECHECK seconds while the helldiver stays the same, so most polls read only the
+-- players block and the slot; a new helldiver (a respawn) finds it again at once.
+local SLOT_RECHECK = 2
+local slot_cache = nil                             -- { avatar, addr, until }
+local function my_support_weapon()
+  local players = rptr(G.players, 'players')
+  local pp = rd(players + 132, 808, 'players')     -- +132 players, +136 local players ... +936 your helldiver (one read)
+  need(u32(pp, 0) <= 4 and u32(pp, 4) <= 4, 'player count')
+  if u32(pp, 0) == 0 or u32(pp, 4) == 0 then slot_cache = nil; return nil, 'no local player yet' end
+  local avatar = u32(pp, 804)
+  if avatar == 32767 then slot_cache = nil; return nil, 'no helldiver' end
+  local now = os.clock()
+  if not (slot_cache and slot_cache.avatar == avatar and now < slot_cache.recheck) then
+    slot_cache = nil
+    local addr, why = find_slot(avatar)
+    if not addr then return nil, why end
+    slot_cache = { avatar = avatar, addr = addr, recheck = now + SLOT_RECHECK }
+  end
+  local id = u32(rd(slot_cache.addr, 12, 'equipment slot'), 8)  -- +0 primary, +4 secondary, +8 support weapon, +12 backpack
   if id == 0 or id == 4294967295 then return nil, 'no support weapon' end
   return id
 end
@@ -372,9 +410,9 @@ local function poll()
     return
   end
   last_why = nil
-  local wm = rptr(G.weapons, 'weapons')
   if id == current then return end
   if handled[id] then current = id; return end
+  local wm = rptr(G.weapons, 'weapons')
   local wi = map_lookup(wm + 48, id, 32768)
   if not wi then return end                        -- (no weapon record yet: tried again next poll)
   need(wi < 16384, 'weapon index')
@@ -431,15 +469,22 @@ end
 
 -- ---------------------------------------------------------------------------------------------- hook
 local started, broken, next_poll, next_log, last_error = false, false, 0, 0, nil
+-- the one-time scan of the game's code: right after every addon has loaded (v19+), else on the first game frame
+local function start()
+  if started then return end
+  started = true
+  local ok, e = pcall(find_layout)
+  if not ok then broken = true; RAU.status = 'off: could not find the game addresses (' .. tostring(e) .. ')'; write_log(); return end
+  RAU.status = 'active'
+end
+if AFTER_STARTUP then
+  local ok, queued = pcall(AFTER_STARTUP, function() start() end)
+  if not (ok and queued) then note('mod loader: after_startup refused the scan (' .. tostring(queued) .. '); it runs on the first frame') end
+end
 local function tick()
   if broken then return end
   local now = os.clock()
-  if not started then
-    started = true
-    local ok, e = pcall(find_layout)
-    if not ok then broken = true; RAU.status = 'off: could not find the game addresses (' .. tostring(e) .. ')'; write_log(); return end
-    RAU.status = 'active'
-  end
+  if not started then start(); if broken then return end end
   if now >= next_poll then
     next_poll = now + POLL_SECONDS
     local ok, e = pcall(poll)
