@@ -1,8 +1,9 @@
 {
-  "version": "3.0.0",
+  "version": "3.0.1",
   "weapons": {
     "wep_railgun": {
       "game_bank_md5": "1841b642b844a97e8511cbe486c02f32",
+      "game_dep_md5": "2eaeab361c536043605a89058d608f90",
       "charge_event": 776670436,
       "charge_rtpc": 3218930162,
       "charge_end_event": 1887886872,
@@ -14,6 +15,7 @@
     },
     "wep_plasma_blaster": {
       "game_bank_md5": "2d52b3d07d523991bfed9f99aa483bf6",
+      "game_dep_md5": "7eff64240430c0fcb603a56b3857466c",
       "charge_event": 1805360771,
       "charge_rtpc": 3218930162,
       "charge_end_event": 2230772993,

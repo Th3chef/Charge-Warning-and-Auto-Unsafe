@@ -34,7 +34,7 @@ In your mod manager (Arsenal / HD2 Mod Manager), open the mod's options (Arsenal
 
 ## Download
 
-Get **Charge-Warning-and-Auto-Unsafe-3.0.0.zip** from the [latest release](https://github.com/Th3chef/Charge-Warning-and-Auto-Unsafe/releases/latest) (not the "Source code" archives). Also on [Nexus Mods](https://www.nexusmods.com/helldivers2/mods/16754) and AyakaMods.
+Get **Charge-Warning-and-Auto-Unsafe-3.0.1.zip** from the [latest release](https://github.com/Th3chef/Charge-Warning-and-Auto-Unsafe/releases/latest) (not the "Source code" archives). Also on [Nexus Mods](https://www.nexusmods.com/helldivers2/mods/16754) and AyakaMods.
 
 ## Install / update
 
