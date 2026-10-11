@@ -23,6 +23,8 @@ env:
 
 jobs:
   nexus:
+    # ((3.0.1 review) a pre-release never goes to Nexus; a run by hand is checked in the download step)
+    if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     steps:
       - name: Check the API key is set
@@ -38,10 +40,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft >/dev/null 2>&1; then
+          if ! STATE=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease -q '.isDraft or .isPrerelease' 2>/dev/null); then
             echo "::error::No published release with the tag $TAG. A draft has no tag yet: publish the release (that runs this workflow by itself), or run it by hand with the tag of a release that is already published."
             exit 1
           fi
+          # ((3.0.1 review) the release must be published and be neither a draft nor a pre-release, not just exist)
+          [ "$STATE" = false ] || { echo "::error::$TAG is a draft or a pre-release: not uploaded."; exit 1; }
           # tags are v3.0.0, v3.0.1, ...; the zip is Charge-Warning-and-Auto-Unsafe-3.0.0.zip and the Nexus version 3.0.0
           VERSION="${TAG#v}"
           FILE="Charge-Warning-and-Auto-Unsafe-${VERSION}.zip"

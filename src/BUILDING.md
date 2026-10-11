@@ -3,7 +3,7 @@
 Builds the mod from the game's own weapon sound banks (RS-422 Railgun and PLAS-45 Epoch). Nothing in here comes from
 another mod.
 
-    tools/sound.py     the warning sound (synthesised; writes assets/warning.wav, the released take, and
+    tools/sound.py     the warning sound (synthesized; writes assets/warning.wav, the released take, and
                        assets/warning.json, the cue: when the first warning beep starts inside the sound)
     tools/art.py       thumbnail, Nexus header, gallery, GitHub social preview and Arsenal option icons, drawn from the
                        sound and its cue (Playwright Chromium, Anton + Barlow Condensed in art/fonts)
@@ -12,13 +12,8 @@ another mod.
     tools/discover.py  finds each bank's charge event, release event, shot event, charge value and mixer by what
                        they do (any game version)
     tools/verify.py    offline check of a built zip against the game banks (build.py runs it on every zip)
-    tools/update.py    after a game patch: re-extracts both banks and rebuilds only if a weapon's audio changed
+    tools/update.py    after a game patch: re-extracts both banks and deps and rebuilds only if a weapon's audio changed
     tools/auto_unsafe.lua  the "Auto unsafe mode" option: a Bingus Shared Loader Lua addon (build.py fills in the version)
-    tools/sim_auto_unsafe.lua  offline test of that addon against fake game memory (non-GC64 LuaJIT 2.1):
-                       luajit sim_auto_unsafe.lua <built addon> <scenario>
-                       scenarios: arc rail norow disagree railunsafe nonlocal epoch swap respawn moved
-                       env: NOCACHE=1 (fresh cache), SHIFT=1 (code moved after a patch), RO_RECORD=1 (record not
-                       writable), V19=1 (Bingus Shared Loader v19: log_directory, after_startup); prints reads/s
 
 ## The weapons (build.py WEAPONS)
 | weapon | bank | first beep | volume gate (charge value) | new object ids |
@@ -33,16 +28,18 @@ Retune by hand only if the game changes a weapon's charge: end_at_s and the gate
 
 ## Auto unsafe mode option
 A Lua addon in the option folder "Auto Unsafe" (Bingus Shared Loader v19 or newer; older loaders still work). Every
-0.25 s it reads your helldiver's support weapon from its loadout slot (the slot's address is found through your owner
-row and loadout and re-checked every 2 s or when your helldiver changes); a Railgun it hasn't seen yet in Safe gets
-Unsafe written once into the weapon component's mode entry (weapon manager +96, 12 bytes per weapon: +0 fire mode 5
-Safe / 6 Unsafe, +5 flag 16 in Unsafe) and into the record's copy (+24, which the game refreshes from the entry every
-frame). A weapon only counts as a Railgun when its entity type in the game's owner table is the RS-422 Railgun's
-(resource hash 2e9d0bdc48b09e60) and that row is marked as ours: the Arc Thrower and the Epoch use the same fire mode
-numbers. All game addresses come from code-pattern scans (with v19: once every addon has loaded, via after_startup),
-remembered per game build in %LOCALAPPDATA%\RailgunAutoUnsafe.cache (every cached spot is re-checked against its
-pattern, otherwise a full rescan). The entry must match the copy and all three write targets must be writable before
-anything is written. Log: RailgunAutoUnsafe.log in the loader's log folder (numbered test builds: Logs\test).
+0.25 s it reads your helldiver's support weapon from its loadout slot (the slot's address is found through your
+owner row and loadout and re-checked every 2 s or when your helldiver changes); a Railgun it hasn't seen yet in Safe
+gets Unsafe written once into the weapon component's mode entry (weapon manager +96, 12 bytes per weapon: +0 fire
+mode 5 Safe / 6 Unsafe, +5 flag 16 in Unsafe) and into the record's copy (+24, which the game refreshes from the
+entry every frame). A weapon only counts as a Railgun when its entity type in the game's owner table (its row count
+is read from the game's code too) is the RS-422 Railgun's (resource hash 2e9d0bdc48b09e60) and that row is marked as
+ours: the Arc Thrower and the Epoch use the same fire mode numbers. All game addresses come from code-pattern scans
+(with v19: once every addon has loaded, via after_startup), remembered per game build in
+%LOCALAPPDATA%\RailgunAutoUnsafe.cache (every cached spot is re-checked against its pattern, otherwise a full
+rescan). The entry must match the copy and all three write targets must be writable before anything is written, and
+if a write still fails, whatever was already written is put back. Log: RailgunAutoUnsafe.log in the loader's log
+folder (numbered test builds: Logs\test).
     python build.py            release + -Tester.zip (extra log lines, test GUID)
     python build.py test N     numbered test build
 
@@ -55,7 +52,7 @@ level ships a full copy of that weapon's bank, because that is how the game load
     cd tools
     python update.py --filediver <path to filediver> --gamedir <Helldivers 2 folder that contains "data">
 
-- Unchanged audio for both weapons: "no update needed" (exit 0).
+- Unchanged audio for both weapons (bank and dep): "no update needed" (exit 0).
 - A weapon's audio changed: it extracts the game's new bank(s), re-finds every hook by what it does, rebuilds
   build/Charge-Warning-and-Auto-Unsafe-<ver>.zip (checked by verify.py) and lists anything that moved (exit 2).
   `--version 3.0.1` sets the new version number.
@@ -68,7 +65,9 @@ edits or removes anything the game has; an outdated copy only lacks the game's n
     cd tools && python sound.py && python art.py && python build.py
 The game banks go in game/ (update.py fetches them; or extract content/audio/wep_railgun.wwise_* and
 content/audio/wep_plasma_blaster.wwise_* with Filediver using --audio-format raw --raw-format separate).
-game/built_from.json records which game banks the build used and every hook it found.
+game/built_from.json records which game banks and deps the build used (md5) and every hook it found. Set RCW_GAME_DIR
+to use another folder for the game files (build.py and update.py both follow it). The zips are byte-reproducible: the
+same game files, assets and art give the same zip, byte for byte.
 
 Needs: python 3 (build/update/verify: standard library only; sound.py: numpy, scipy, pyloudnorm; art.py: pillow,
 numpy, playwright).

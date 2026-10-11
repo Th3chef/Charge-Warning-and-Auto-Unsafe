@@ -2,11 +2,12 @@
     python verify.py <mod zip>
 For every weapon and volume level it re-reads the patched bank and checks that
   - the game's bank is all still there: every original object and media file is present and unchanged, except the
-    events the warning hooks into (only actions appended) and the mixer's child list (only the warning added);
+    events the warning hooks into (only actions appended) and the mixer (the game's mixer byte for byte, with only the
+    warning's id inserted into its sorted child list);
   - the warning sound sits under the charge mixer, follows the charge value with the weapon's gate, at the level's volume;
   - the charge event plays it with the delay that puts its first beep on the weapon's full-damage moment;
   - it is stopped on release (charge-end), on the shot and on every other event that cuts the charge sounds.
-Exit 0 = all good, 1 = something is wrong (it says what)."""
+Exit 0 = all good, 1 = something is wrong (it says what). build.py also treats a check that can't run as failed."""
 import io, json, os, struct, sys, wave, zipfile
 import wwise_bank as wb
 import build as B
@@ -23,8 +24,25 @@ def events(bank):
     return {u32(b, 0): list(struct.unpack_from('<%dI' % b[4], b, 5)) for k, b in bank.objects if k == wb.T_EVENT}
 
 
+def mixer_with(body, child):
+    """((3.0.1 review) the game's mixer with one child added, worked out here on its own: the object ends with u32 count
+    and that many child ids in ascending order; None when no such list is there.)"""
+    for n in range(1, (len(body) - 4) // 4 + 1):
+        start = len(body) - 4 - 4 * n
+        if u32(body, start) == n:
+            kids = list(struct.unpack_from('<%dI' % n, body, start + 4))
+            if kids == sorted(kids) and child not in kids:
+                kids = sorted(kids + [child])
+                return body[:start] + struct.pack('<%dI' % (n + 2), n + 1, *kids)
+    return None
+
+
 def main(zpath):
-    z = zipfile.ZipFile(zpath)
+    with zipfile.ZipFile(zpath) as z:          # ((3.0.1 review) closed on every path, so build.py can delete a failed zip)
+        return check(z)
+
+
+def check(z):
     manifest = json.loads(z.read('manifest.json'))
     problems = []
     with wave.open(os.path.join(ROOT, 'assets', 'warning.wav')) as w:
@@ -53,14 +71,20 @@ def main(zpath):
             bank = wb.Bank(arc[bank_row[2]:bank_row[2] + bank_row[7]])
             obj = {u32(b, 0): (k, bytes(b)) for k, b in bank.objects}
             # 1. additive only
-            changed = {hook['charge_event'], hook['charge_end_event'], hook['mixer']} | set(hook['other_stoppers'])
+            changed = {hook['charge_event'], hook['charge_end_event']} | set(hook['other_stoppers'])
             if hook['fire_event']:
                 changed.add(hook['fire_event'])
             for oid, (k, b) in gobj.items():
                 if oid not in obj:
                     problems.append('%s: game object %d is missing' % (where, oid))
-                elif oid not in changed and obj[oid] != (k, b):
+                elif oid not in changed and oid != hook['mixer'] and obj[oid] != (k, b):   # (the mixer: checked below)
                     problems.append('%s: game object %d was changed' % (where, oid))
+            # ((3.0.1 review) the mixer: the game's, with only the warning sound inserted into its child list)
+            want = mixer_with(gobj[hook['mixer']][1], ids['sound'])
+            if want is None:
+                problems.append('%s: the game mixer %d has no child list' % (where, hook['mixer']))
+            elif obj.get(hook['mixer']) != (gobj[hook['mixer']][0], want):
+                problems.append('%s: the mixer is not the game mixer plus the warning' % where)
             new = set(obj) - set(gobj)
             expect = {ids[k] for k in ids if k not in ('wem', 'curve')}
             if not hook['fire_event']:

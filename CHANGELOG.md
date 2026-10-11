@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.0.1
+- Auto unsafe mode: a new Railgun now always starts in Unsafe, also when the game reuses an earlier weapon's id for it (for example in the next mission).
+- Auto unsafe mode: if the game refuses one of its changes halfway, everything it already changed is put back.
+- Auto unsafe mode: reads the size of the game's owner table from the game itself.
+- The warning sounds and the volume options are unchanged.
+
 ## 3.0.0
 - Renamed to Charge Warning & Auto Unsafe: it now covers the PLAS-45 Epoch too.
 - New: Epoch warning - the same surge and warning beeps, starting exactly at full charge (2x damage), before it overloads. Its own option in your mod manager: on/off and Loud, Medium or Quiet.

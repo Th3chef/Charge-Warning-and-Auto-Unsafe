@@ -51,6 +51,9 @@ local RAILGUN_TYPE = type_bytes('2e9d0bdc48b09e60')
 local TYPE_NAMES = { [RAILGUN_TYPE] = 'RS-422 Railgun', [type_bytes('96de9cd50f7306e6')] = 'ARC-3 Arc Thrower',
   [type_bytes('e8d5f49ad7780e54')] = 'PLAS-45 Epoch' }
 local OWNER_ROW_COUNT, OWNER_ROW_SIZE = 2048, 24    -- the game's owner table (2048 rows of 24 bytes; type at +0, id at +8)
+-- ((3.0.1 review) one bound for the table everywhere: the row count is read from the game's own code (its free-row
+-- search wraps at the table's end, 2048 in the Oct 2026 game); OWNER_ROW_COUNT is only the fallback when that code
+-- isn't found, and both the owner-index check and the weapon type check use G.owner_count)
 local TYPE_TRIES = 8                                -- polls to wait for a new weapon's owner row before leaving it alone
 
 -- ---------------------------------------------------------------------------------------------- log
@@ -174,6 +177,10 @@ local PATTERNS = {
 }
 local OWNER_INDEX = '458b93????????33d248895c241041????????????48896c2418410fafd8418d6aff488974242048893c244585d274??498bbb????????418bb3????????6666660f1f840000000000'
 local OWNER_ROWS = '8b4104488d0c40488d85????????488d04c8eb??488d05????????'
+-- ((3.0.1 review) the owner table's free-row search (two copies in the game's code): it compares each row's id (+8, so
+-- its displacement is the table's place + 8, a cross-check of OWNER_ROWS) and wraps at the row count, twice)
+local OWNER_COUNT = { { p = '423994c1????????74??ffc08981????????3d????????75??448991????????418bc241ffc14181f9????????72??', rows_at = 4, n_at = 19 },
+  { p = '398cd6????????74??ffc08986????????3d????????75??44898e????????418bc141ffc04181f8????????72??', rows_at = 3, n_at = 18 } }
 local AVATAR_TYPE = ('4d1c334d294dfa97'):gsub('..', function(x) return string.char(tonumber(x, 16)) end):reverse()
 
 -- game.dll's code section and a key for this game build (link time stamp, image size, code section place and size)
@@ -242,11 +249,26 @@ local function items()
   end
   list[#list + 1] = { key = 'owner_index 1', name = 'owner_index', p = OWNER_INDEX, value = function(b) return u32(b, 3) - 8 end }
   list[#list + 1] = { key = 'owner_rows 1', name = 'owner_rows', p = OWNER_ROWS, value = function(b) return u32(b, 10) - 8 end }
+  -- ((3.0.1 review) the row count (0 when the code's two compares differ) and, from the same code, the table's place again)
+  for k, c in ipairs(OWNER_COUNT) do
+    list[#list + 1] = { key = 'owner_count ' .. k, name = 'owner_count', p = c.p,
+      value = function(b) local n = u32(b, c.n_at); return n == u32(b, #b - 6) and n or 0 end }
+    list[#list + 1] = { key = 'owner_rows ' .. (k + 1), name = 'owner_rows', p = c.p, value = function(b) return u32(b, c.rows_at) - 8 end }
+  end
   return list
 end
 local function apply(gbase, values)
   for name in pairs(PATTERNS) do G[name] = gbase + values[name] end
   G.owner_index, G.owner_rows = values.owner_index, values.owner_rows
+  -- ((3.0.1 review) the owner table's row count from the game code, else the Oct 2026 game's 2048)
+  local n = values.owner_count
+  if n and n >= 256 and n <= 65536 then
+    G.owner_count = n
+    if TESTER then note('owner table: ' .. n .. ' rows (read from the game code)') end
+  else
+    G.owner_count = OWNER_ROW_COUNT
+    note('owner table: its size was not found in the game code - using ' .. OWNER_ROW_COUNT .. ' rows')
+  end
 end
 
 -- the cache: a line with the build key, then 'name k offset' for one place each item was found. On load every place is read
@@ -273,6 +295,8 @@ local function from_cache(gbase, rva, key)
   end
   for name in pairs(PATTERNS) do if not values[name] then return false end end
   if not (values.owner_index and values.owner_rows) then return false end
+  -- ((3.0.1 review) a cache without the row count (or its 'not found' line) is from 3.0.0: scan once more)
+  if values.owner_count == nil and not at['owner_count 0'] then return false end
   apply(gbase, values)
   return true
 end
@@ -285,9 +309,10 @@ local function find_layout()
   local rva, vsize, key = code_info(gbase)
   if from_cache(gbase, rva, key) then note(string.format('game addresses: from the cache (%.2f s)', os.clock() - t)); return end
   local text = rd(gbase + rva, vsize, 'game code')
-  local values, found = {}, {}
+  local values, found, seen = {}, {}, {}
   for _, it in ipairs(items()) do
-    local o = find_once(text, it.p)
+    local o = seen[it.p]                           -- ((3.0.1 review) a pattern used for two items is searched once)
+    if o == nil then o = find_once(text, it.p) or false; seen[it.p] = o end
     if o then
       local v = it.value(text:sub(o + 1, o + #it.p / 2), rva, o)
       need(not values[it.name] or values[it.name] == v, it.name .. ': patterns disagree')
@@ -297,6 +322,7 @@ local function find_layout()
   for name in pairs(PATTERNS) do need(values[name], name .. ': not found') end
   need(values.owner_index, 'owner map: not found')
   need(values.owner_rows, 'owner rows: not found')
+  if not values.owner_count then found[#found + 1] = 'owner_count 0 0' end   -- ((3.0.1 review) remembered as not found)
   apply(gbase, values)
   note(string.format('game addresses: found by scanning the game code (%.2f s)', os.clock() - t))
   if CACHE then
@@ -310,7 +336,7 @@ local function find_slot(avatar)
   local owners = rptr(G.owners, 'owners')
   local e = map_lookup(owners + G.owner_index, avatar, 1048576)
   if not e then return nil, 'no helldiver' end
-  need(e < 262144, 'owner index')
+  need(e < G.owner_count, 'owner index')            -- ((3.0.1 review) the same bound as weapon_type: the table's rows)
   local me = rd(owners + G.owner_rows + e * 24, 24, 'owner row')
   if me:sub(1, 8) ~= AVATAR_TYPE or bit.band(me:byte(21), 3) ~= 1 then return nil, 'helldiver is not ours' end
   local equipment = rptr(G.equipment, 'equipment')
@@ -320,7 +346,7 @@ local function find_slot(avatar)
   return rptr(equipment + 80, 'equipment slots') + q * 48
 end
 
--- your helldiver's support weapon: entity id, or nil + why. The way from your helldiver to its loadout slot (five
+-- your helldiver's support weapon: entity id, or nil + why (+ true when there is no local player: between missions). The way from your helldiver to its loadout slot (five
 -- lookups) is remembered for SLOT_RECHECK seconds while the helldiver stays the same, so most polls read only the
 -- players block and the slot; a new helldiver (a respawn) finds it again at once.
 local SLOT_RECHECK = 2
@@ -329,7 +355,7 @@ local function my_support_weapon()
   local players = rptr(G.players, 'players')
   local pp = rd(players + 132, 808, 'players')     -- +132 players, +136 local players ... +936 your helldiver (one read)
   need(u32(pp, 0) <= 4 and u32(pp, 4) <= 4, 'player count')
-  if u32(pp, 0) == 0 or u32(pp, 4) == 0 then slot_cache = nil; return nil, 'no local player yet' end
+  if u32(pp, 0) == 0 or u32(pp, 4) == 0 then slot_cache = nil; return nil, 'no local player yet', true end
   local avatar = u32(pp, 804)
   if avatar == 32767 then slot_cache = nil; return nil, 'no helldiver' end
   local now = os.clock()
@@ -355,9 +381,9 @@ local function hexof(t)
 end
 local function weapon_type(id)
   local owners = rptr(G.owners, 'owners')
-  local all = rd(owners + G.owner_rows, OWNER_ROW_COUNT * OWNER_ROW_SIZE, 'owner rows')
+  local all = rd(owners + G.owner_rows, G.owner_count * OWNER_ROW_SIZE, 'owner rows')
   local found, rows, mine = nil, 0, 0
-  for r = 0, OWNER_ROW_COUNT - 1 do
+  for r = 0, G.owner_count - 1 do
     local o = r * OWNER_ROW_SIZE
     if u32(all, o + 8) == id then
       rows = rows + 1
@@ -376,15 +402,16 @@ local function type_name(t) return TYPE_NAMES[t] or ('type ' .. hexof(t)) end
 
 -- ---------------------------------------------------------------------------------------------- the rule
 local handled = {}                                 -- weapon ids already dealt with (Railguns set or seen in Unsafe,
-                                                   -- and weapons that are not Railguns)
+                                                   -- and weapons that are not Railguns) -> their weapon index
+                                                   -- ((3.0.1 review) the index tells a new weapon that got an old id apart)
 local tries = {}                                   -- weapon id -> polls spent waiting for its owner row
 local current, last_why = nil, nil
 local PRUNE_SECONDS, next_prune = 5, 0
 -- (sweep) Railguns that no longer exist are forgotten, so a new Railgun that gets an old one's id is still set
 local function prune(wm)
-  for id in pairs(handled) do
+  for id, was in pairs(handled) do
     local ok, wi = pcall(map_lookup, wm + 48, id, 32768)
-    if ok and not wi then handled[id] = nil end
+    if ok and wi ~= was then handled[id] = nil end -- ((3.0.1 review) gone, or another weapon now has the id)
   end
   for id in pairs(tries) do
     local ok, wi = pcall(map_lookup, wm + 48, id, 32768)
@@ -392,29 +419,51 @@ local function prune(wm)
   end
 end
 local pending = nil                                -- { id, addr, at }: check that the game kept Unsafe
+-- ((3.0.1 review) undo a half-done switch: the mode entry (+0), its flag byte and the record's mode back to what they
+-- were, writing only what differs; true when all three read back as before)
+local function put_back(st, mode, flag, addr)
+  local e, r = read(st, STATE_STRIDE), read(addr, 4)
+  if e and u32(e, 0) ~= mode then write_u32(st, mode) end
+  if e and e:byte(FLAG_AT + 1) ~= flag then write_u8(st + FLAG_AT, flag) end
+  if r and u32(r, 0) ~= mode then write_u32(addr, mode) end
+  e, r = read(st, STATE_STRIDE), read(addr, 4)
+  return e ~= nil and r ~= nil and u32(e, 0) == mode and e:byte(FLAG_AT + 1) == flag and u32(r, 0) == mode
+end
 local function poll()
   if pending and os.clock() >= pending.at then
-    local now_mode = u32(rd(pending.addr, 4, 'fire mode'), 0)
-    if now_mode == UNSAFE then event(string.format('Railgun %d: the game kept Unsafe', pending.id))
-    else event(string.format('Railgun %d: the game put mode %d back', pending.id, now_mode)) end
-    pending = nil
+    -- ((3.0.1 review) cleared before the read, and a read that can't throw: one failed re-read used to stop every later poll)
+    local p = pending; pending = nil
+    local b = read(p.addr, 4)
+    if not b then event(string.format('Railgun %d: could not re-read its fire mode', p.id))
+    elseif u32(b, 0) == UNSAFE then event(string.format('Railgun %d: the game kept Unsafe', p.id))
+    else event(string.format('Railgun %d: the game put mode %d back', p.id, u32(b, 0))) end
   end
   if (next(handled) or next(tries)) and os.clock() >= next_prune then  -- (also while you hold no support weapon)
     next_prune = os.clock() + PRUNE_SECONDS
     pcall(function() prune(rptr(G.weapons, 'weapons')) end)
   end
-  local id, why = my_support_weapon()
+  local id, why, between = my_support_weapon()
   if not id then
     if why ~= last_why then last_why = why; if TESTER then event('waiting: ' .. why) end end
     current = nil
+    -- ((3.0.1 review) between missions every weapon is new: forget them all (their ids are used again))
+    if between and (next(handled) or next(tries)) then
+      handled, tries = {}, {}
+      if TESTER then event('no local player: forgot the weapons seen so far') end
+    end
     return
   end
   last_why = nil
   if id == current then return end
-  if handled[id] then current = id; return end
   local wm = rptr(G.weapons, 'weapons')
   local wi = map_lookup(wm + 48, id, 32768)
   if not wi then return end                        -- (no weapon record yet: tried again next poll)
+  -- ((3.0.1 review) one lookup per weapon change: an id seen before counts only while it is still the same weapon index)
+  if handled[id] == wi then current = id; return end
+  if handled[id] then
+    handled[id] = nil
+    if TESTER then event(string.format('support weapon %d: a new weapon with an old id (index %d)', id, wi)) end
+  end
   need(wi < 16384, 'weapon index')
   local addr = rptr(wm + 88, 'weapon records') + wi * WEAPON_STRIDE + MODE_AT
   local mode = u32(rd(addr, 4, 'fire mode'), 0)
@@ -429,7 +478,7 @@ local function poll()
   if not wtype then
     tries[id] = (tries[id] or 0) + 1
     if tries[id] < TYPE_TRIES then current = nil; return end   -- (its row may not be there yet: looked at again next poll)
-    handled[id] = true; tries[id] = nil
+    handled[id] = wi; tries[id] = nil
     event(string.format('support weapon %d: fire mode %d, could not confirm it is a Railgun (%s) - left alone', id, mode, twhy))
     return
   end
@@ -439,11 +488,11 @@ local function poll()
       rows, mine))
   end
   if wtype ~= RAILGUN_TYPE then
-    handled[id] = true
+    handled[id] = wi
     event(string.format('support weapon %d: %s, not a Railgun - left alone', id, type_name(wtype)))
     return
   end
-  handled[id] = true
+  handled[id] = wi
   RAU.seen = RAU.seen + 1
   if mode == UNSAFE then event(string.format('Railgun %d already in Unsafe', id)); return end
   -- the mode entry must agree with the record's copy, or the layout isn't what this was built for: then do nothing
@@ -458,12 +507,15 @@ local function poll()
     event(string.format('Railgun %d: could not set Unsafe (memory not writable) - left alone', id))
     return
   end
-  if write_u32(st, UNSAFE) and write_u8(st + FLAG_AT, bit.bor(e:byte(FLAG_AT + 1), UNSAFE_FLAG)) and write_u32(addr, UNSAFE) then
+  local flag = e:byte(FLAG_AT + 1)
+  if write_u32(st, UNSAFE) and write_u8(st + FLAG_AT, bit.bor(flag, UNSAFE_FLAG)) and write_u32(addr, UNSAFE) then
     RAU.set = RAU.set + 1
     event(string.format('Railgun %d set to Unsafe', id))
     if TESTER then pending = { id = id, addr = addr, at = os.clock() + 0.5 } end
   else
-    event(string.format('Railgun %d: could not set Unsafe (memory not writable)', id))
+    -- ((3.0.1 review) a write failed after an earlier one worked: put all three back as they were)
+    event(string.format('Railgun %d: could not set Unsafe (memory not writable) - %s', id,
+      put_back(st, mode, flag, addr) and 'put back as it was' or 'could NOT put it back: switch modes once by hand'))
   end
 end
 

@@ -11,7 +11,8 @@ Inputs (../game/, extracted from the game with Filediver, see README.md):
 Output: ../build/<zip>, ready for Arsenal / the HD2 mod manager.
     python build.py            release
     python build.py test N     test build N: "<version> Test N", its own GUID (installs next to the release), tester logging
-Every zip is checked with verify.py before the build finishes; a failed check deletes it and stops the build."""
+Every zip is checked with verify.py before the build finishes; a failed check (or one that can't run) deletes it and
+stops the build. The zips are byte-reproducible: the same inputs give the same bytes (fixed entry times and order)."""
 import json, os, struct, sys, wave, zipfile
 import hashlib
 import wwise_bank as wb
@@ -19,7 +20,7 @@ from discover import discover
 
 NAME = 'Charge Warning & Auto Unsafe'
 FILE_BASE = 'Charge-Warning-and-Auto-Unsafe'      # zip names (no '&': Nexus file names allow only letters, digits, spaces and _ ' ( ) . -)
-VERSION = '3.0.0'
+VERSION = '3.0.1'
 GUID = 'c8736b4d-7681-43b3-ac5e-03314f2d7034'
 GUID_TEST = '6cf144dc-0353-4f83-9da1-b57f2875bce7'   # test builds
 TEST = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[1] == 'test' else 0
@@ -44,7 +45,7 @@ VOLUME_LEVELS = [
     ('Quiet (-16 dB)', -16, 'A subtle cue, well below Loud.', 'vol_1'),
 ]
 
-# ---- behaviour, per weapon (retune only if the game changes that weapon's charge):
+# ---- behavior, per weapon (retune only if the game changes that weapon's charge):
 #      end_at_s      seconds into the charge where the sound's cue (the first warning beep) must land
 #      silent_up_to / full_from   the warning's volume follows the game's charge value (RTPC 0..1): a safety gate
 WEAPONS = [
@@ -111,7 +112,8 @@ def load_inputs(weapon, taken_elsewhere=()):
             cue_s = json.load(f)['cue_s']
     assert 0 < cue_s <= length_s, 'cue %.3f s is outside the %.3f s sound' % (cue_s, length_s)
     wem, wem_hash = wb.pcm_wem(pcm, channels, rate)
-    stamp = dict(game_bank_md5=hashlib.md5(source).hexdigest(), **hook)
+    stamp = dict(game_bank_md5=hashlib.md5(source).hexdigest(), game_dep_md5=hashlib.md5(dep).hexdigest(),  # ((3.0.1 review) + dep)
+                 **hook)
     return dict(weapon=weapon, source=source, dep=dep, resource=resource, hook=hook, ids=ids, wem=wem,
                 wem_hash=wem_hash, delay_ms=round((weapon['end_at_s'] - cue_s) * 1000), stamp=stamp)
 
@@ -192,23 +194,41 @@ def auto_unsafe_archive(tester=False):
     return head + struct.pack('<QQQII', 0, LUA_TYPE, 1, 16, 16) + row + data
 
 
+ZIP_TIME = (1980, 1, 1, 0, 0, 0)       # ((3.0.1 review) every zip entry gets this time, so a rebuild is byte-identical)
+
+
+def zip_entries(manifest, variants, tester=False):
+    """The zip's entries in their fixed order: (name, bytes)."""
+    def png(*parts):
+        with open(os.path.join(ROOT, 'art', *parts), 'rb') as f:
+            return f.read()
+    out = [('manifest.json', json.dumps(manifest, indent=2).encode('utf-8')), ('thumbnail.png', png('thumbnail_512.png'))]
+    for icon in sorted({w['icon'] for w in WEAPONS} | {'unsafe'} | {lv[3] for lv in VOLUME_LEVELS}):
+        out.append(('options/%s.png' % icon, png('options', icon + '.png')))
+    for folder, archive in variants + [(AUTO_UNSAFE_DIR, auto_unsafe_archive(tester))]:
+        out += [(folder + '/' + ARCHIVE, archive), (folder + '/' + ARCHIVE + '.gpu_resources', b''),
+                (folder + '/' + ARCHIVE + '.stream', b'')]
+    return out
+
+
 def write_zip(zip_path, manifest, variants, tester=False):
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
-        z.writestr('manifest.json', json.dumps(manifest, indent=2))
-        z.write(os.path.join(ROOT, 'art', 'thumbnail_512.png'), 'thumbnail.png')
-        for icon in sorted({w['icon'] for w in WEAPONS} | {'unsafe'} | {lv[3] for lv in VOLUME_LEVELS}):
-            z.write(os.path.join(ROOT, 'art', 'options', icon + '.png'), 'options/%s.png' % icon)
-        for folder, archive in variants:
-            z.writestr(folder + '/' + ARCHIVE, archive)
-            z.writestr(folder + '/' + ARCHIVE + '.gpu_resources', b'')
-            z.writestr(folder + '/' + ARCHIVE + '.stream', b'')
-        z.writestr(AUTO_UNSAFE_DIR + '/' + ARCHIVE, auto_unsafe_archive(tester))
-        z.writestr(AUTO_UNSAFE_DIR + '/' + ARCHIVE + '.gpu_resources', b'')
-        z.writestr(AUTO_UNSAFE_DIR + '/' + ARCHIVE + '.stream', b'')
+    with zipfile.ZipFile(zip_path, 'w') as z:
+        for name, data in zip_entries(manifest, variants, tester):
+            # ((3.0.1 review) fixed time, compression, system and attributes: nothing from the clock or the file system)
+            info = zipfile.ZipInfo(name, ZIP_TIME)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            z.writestr(info, data, compresslevel=6)
     import verify                              # every zip is checked before the build can finish
-    if verify.main(zip_path) != 0:
+    # ((3.0.1 review) a check that can't run (a bank entry or an action it expects missing) counts as failed too)
+    try:
+        ok, why = verify.main(zip_path) == 0, 'verify.py found problems'
+    except Exception as e:
+        ok, why = False, 'verify.py could not check it (%s: %s)' % (type(e).__name__, e)
+    if not ok:
         os.remove(zip_path)
-        raise SystemExit('verify.py found problems: %s was not kept' % os.path.basename(zip_path))
+        raise SystemExit('%s: %s was not kept' % (why, os.path.basename(zip_path)))
     print(zip_path)
 
 

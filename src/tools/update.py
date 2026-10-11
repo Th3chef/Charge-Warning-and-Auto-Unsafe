@@ -7,16 +7,18 @@ top of the new sounds.
 
 1. Asks Filediver where each weapon's bank lives in the game (ignoring mod patch files) and extracts the game's own
    bank and dep.
-2. Compares each with the bank the current release was built from (../game/built_from.json).
+2. Compares each bank and dep with the ones the current release was built from (../game/built_from.json).
    All the same -> "no update needed" (exit 0): the released mod keeps working as is.
-   Any changed  -> copies the new banks to ../game/, rebuilds with build.py (every hook is found again by discover.py,
-                   and verify.py checks the zips) and lists what moved (exit 2): test it in game, then release it.
+   Any changed  -> copies both weapons' new banks and deps to the build's game folder (../game/, or RCW_GAME_DIR as for
+                   build.py), rebuilds with build.py (every hook is found again by discover.py, and verify.py checks the
+                   zips) and lists what moved (exit 2): test it in game, then release it.
 Exit 1 means something needs a person: Filediver failed, or a bank changed so much its hooks were not found."""
 import argparse, hashlib, json, os, re, shutil, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-GAME = os.path.join(os.path.dirname(HERE), 'game')
 sys.path.insert(0, HERE)
+import build                                        # ((3.0.1 review) one game folder: build.GAME, RCW_GAME_DIR included)
+GAME = build.GAME
 
 
 def run(cmd):
@@ -43,9 +45,12 @@ def extract(filediver, gamedir, bank, tmp):
     if not m:
         return 'Filediver did not list %s:\n%s' % (name, out[-2000:])
     archives = [x.strip() for x in m.group(1).split(',')]
-    vanilla = [x for x in archives if not x.startswith('9ba626afa44a3aa3')]    # mod patches all use this archive name
-    if not vanilla:
-        return 'only mod copies of %s were found: %s' % (name, archives)
+    # ((3.0.1 review) the game's own archive is the one that is not a patch file (every mod is a .patch_N), and there
+    # must be exactly one)
+    vanilla = [x for x in archives if '.patch_' not in x]
+    if len(vanilla) != 1:
+        return ('only mod copies of %s were found: %s' if not vanilla else
+                '%s is in more than one game archive (%s): it needs a look') % (name, archives)
     dest = os.path.join(tmp, bank)
     code, out = run([filediver, '--gamedir', gamedir, '-a', vanilla[0], '-i', 'content/audio/%s.wwise_*' % bank,
                      '--audio-format', 'raw', '--raw-format', 'separate', '-o', dest])
@@ -63,29 +68,35 @@ def main():
     ap.add_argument('--version')
     a = ap.parse_args()
 
-    import build
     old = old_stamps()
-    changed = []
+    changed, extracted = [], []
     tmp = tempfile.mkdtemp()
     try:
         for w in build.WEAPONS:
             got = extract(a.filediver, a.gamedir, w['bank'], tmp)
             if isinstance(got, str):
                 print(got); return 1
-            new_md5 = hashlib.md5(open(got[0], 'rb').read()).hexdigest()
-            was = old.get(w['bank'], {}).get('game_bank_md5')
-            if was == new_md5:
-                print('%s: the game\'s sounds are unchanged (bank %s).' % (w['title'], new_md5[:12]))
+            extracted += got
+            # ((3.0.1 review) the dep is compared too: it ships in the patch next to the bank)
+            new = {k: hashlib.md5(open(f, 'rb').read()).hexdigest() for k, f in zip(('game_bank_md5', 'game_dep_md5'), got)}
+            was = old.get(w['bank'], {})
+            diff = [k for k in new if was.get(k) != new[k]]
+            if not diff:
+                print('%s: the game\'s sounds are unchanged (bank %s, dep %s).' % (
+                    w['title'], new['game_bank_md5'][:12], new['game_dep_md5'][:12]))
                 continue
-            print('%s: the game\'s sounds changed (was %s, now %s).' % (w['title'], (was or '?')[:12], new_md5[:12]))
+            print('%s: the game\'s sounds changed (%s).' % (w['title'], ', '.join(
+                '%s was %s, now %s' % (k.split('_')[1], (was.get(k) or '?')[:12], new[k][:12]) for k in diff)))
             changed.append(w)
-            os.makedirs(GAME, exist_ok=True)
-            for f in got:
-                shutil.copy(f, os.path.join(GAME, os.path.basename(f)))
+        if not changed:
+            print('No update needed: the released mod matches the game.'); return 0
+        # ((3.0.1 review) the build reads both weapons' banks and deps: copy them all, not just the changed ones, so it
+        # never mixes the new game's files with stale copies)
+        os.makedirs(GAME, exist_ok=True)
+        for f in extracted:
+            shutil.copy(f, os.path.join(GAME, os.path.basename(f)))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    if not changed:
-        print('No update needed: the released mod matches the game.'); return 0
 
     if a.version:
         build.VERSION = a.version
@@ -98,7 +109,7 @@ def main():
     for w in changed:
         before, after = old.get(w['bank'], {}), new.get(w['bank'], {})
         moved = ['%s %s -> %s' % (k, before.get(k), v) for k, v in after.items()
-                 if k != 'game_bank_md5' and k in before and before[k] != v]
+                 if k not in ('game_bank_md5', 'game_dep_md5') and k in before and before[k] != v]
         print('%s: %s' % (w['title'], ('moved: ' + '; '.join(moved)) if moved else 'every hook is where it was'))
     print('Rebuilt. Test it in game, then release it as an update.')
     return 2

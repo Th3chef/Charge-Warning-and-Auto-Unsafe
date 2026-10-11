@@ -1,4 +1,4 @@
-"""Synthesises the warning: "Arcing Surge" - a low, growling electric hum that swells and climbs, with crackling arcs
+"""Synthesizes the warning: "Arcing Surge" - a low, growling electric hum that swells and climbs, with crackling arcs
 building up over it, fast piezo warning beeps, and a sharp discharge snap.
 
 The first beep is the cue: it must land at 90% charge (full damage). sound.py writes the cue's time into
@@ -8,7 +8,7 @@ ALARM_S and the snap follows them.
     python sound.py              -> ../assets/warning.wav + ../assets/warning.json (the released take)
     python sound.py --preview    -> warning_preview.wav (does not touch the assets)
 
-Needs numpy, scipy and pyloudnorm. Everything is synthesised; nothing is sampled."""
+Needs numpy, scipy and pyloudnorm. Everything is synthesized; nothing is sampled."""
 import json, os, sys, wave
 import numpy as np
 import pyloudnorm as pyln

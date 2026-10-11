@@ -89,8 +89,10 @@ class Bank:
         _, body = self.find(parent_id)
         for count in range(1, 1024):
             start = len(body) - 4 - 4 * count
-            if struct.unpack_from('<I', body, start)[0] == count:
+            if start >= 0 and struct.unpack_from('<I', body, start)[0] == count:
                 break
+        else:                                   # ((3.0.1 review) never rewrite the object's tail as a made-up child list)
+            raise AssertionError('mixer child list not found')
         children = sorted(struct.unpack_from('<%dI' % count, body, start + 4) + (child_id,))
         body[start:] = struct.pack('<I', len(children)) + struct.pack('<%dI' % len(children), *children)
 

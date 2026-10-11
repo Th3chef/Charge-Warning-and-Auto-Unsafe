@@ -45,9 +45,9 @@ def scope(width, height):
     seg_w = mark_x / 18
     segs = []
     for i in range(18):
-        colour = ['#ffe710', '#ffb000', '#ff6a00', '#ff2d2d'][min(3, i * 20 // 18 // 5)]
+        color = ['#ffe710', '#ffb000', '#ff6a00', '#ff2d2d'][min(3, i * 20 // 18 // 5)]
         segs.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="3" fill="%s"/>'
-                    % (i * seg_w + 3, height * 0.86, seg_w - 6, height * 0.1, colour))
+                    % (i * seg_w + 3, height * 0.86, seg_w - 6, height * 0.1, color))
     for b in CUE['beeps_s']:
         segs.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="3" fill="%s" filter="url(#glow)"/>'
                     % (x_of(b) + 3, height * 0.86, x_of(CUE['beep_s']) - 2, height * 0.1, RED))
@@ -128,14 +128,15 @@ LAYOUTS = {
 }
 
 def option_icons():
-    """Arsenal option icons (256x256): blurred crop of the art, yellow frame, a yellow speaker with 1-4 sound waves."""
+    """Arsenal option icons (256x256): blurred crop of the art, yellow frame, a yellow speaker with 1-3 sound waves
+    (Quiet, Medium, Loud), the Auto unsafe padlock and the weapon icons."""
     from PIL import ImageDraw, ImageFilter
     os.makedirs(os.path.join(ART, 'options'), exist_ok=True)
     src = Image.open(os.path.join(ART, 'thumbnail_1254.png')).convert('RGB')
     back = src.crop((140, 300, 1140, 800)).resize((1024, 1024)).filter(ImageFilter.GaussianBlur(28))
     back = Image.blend(back, Image.new('RGB', back.size, (8, 9, 11)), 0.62)
     Y = (255, 231, 16)
-    for name, waves in (('volume', 3), ('vol_1', 1), ('vol_2', 2), ('vol_3', 3), ('vol_4', 4)):
+    for name, waves in (('vol_1', 1), ('vol_2', 2), ('vol_3', 3)):   # ((3.0.1 review) only the icons the build ships)
         im = back.copy()
         d = ImageDraw.Draw(im)
         d.rectangle([0, 0, 1023, 1023], outline=Y, width=56)
@@ -159,10 +160,10 @@ def option_icons():
     weapon_icons(back)
 
 
-def _waves(d, cx, cy, n=2, colour=(255, 45, 45)):
+def _waves(d, cx, cy, n=2, color=(255, 45, 45)):
     for i in range(n):
         r = 90 + 70 * i
-        d.arc([cx - r, cy - r, cx + r, cy + r], -50, 50, fill=colour, width=44)
+        d.arc([cx - r, cy - r, cx + r, cy + r], -50, 50, fill=color, width=44)
 
 
 def weapon_icons(back):
